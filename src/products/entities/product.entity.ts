@@ -4,7 +4,9 @@ import {
   Column,
   BeforeInsert,
   BeforeUpdate,
+  OneToMany,
 } from 'typeorm';
+import { ProductImage } from './index';
 
 @Entity()
 export class Product {
@@ -46,6 +48,13 @@ export class Product {
   tags: string[];
 
   //images
+
+  @OneToMany(() => ProductImage, (productImage) => productImage.product, {
+    cascade: true,
+    eager: true,
+  })
+  images?: ProductImage[];
+
   @BeforeInsert()
   checkSlugInsert() {
     if (!this.slug) {
