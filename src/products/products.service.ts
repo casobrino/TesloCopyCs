@@ -7,12 +7,11 @@ import {
 import { Logger } from '@nestjs/common/services';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PaginationDto } from 'src/common/dtos/paginations.dto';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { Product } from './entities/product.entity';
 import { validate as isUUID } from 'uuid';
-import { ProductImage } from './entities';
+import { ProductImage, Product } from './entities';
 
 @Injectable()
 export class ProductsService {
@@ -22,12 +21,13 @@ export class ProductsService {
     private readonly productRepository: Repository<Product>,
     @InjectRepository(ProductImage)
     private readonly productImageRepository: Repository<ProductImage>,
+    private readonly dataSource: DataSource,
   ) {}
   async create(createProductDto: CreateProductDto) {
     try {
-      const { images = [], ...productDetaild } = createProductDto;
+      const { images = [], ...productDetails } = createProductDto;
       const product = this.productRepository.create({
-        ...productDetaild,
+        ...productDetails,
         images: images.map((image) =>
           this.productImageRepository.create({ url: image }),
         ),
@@ -65,7 +65,7 @@ export class ProductsService {
           title: term.toUpperCase(),
           slug: term.toLocaleLowerCase(),
         })
-        .leftJoinAndSelect('prod.images', 'proImages')
+        .leftJoinAndSelect('prod.images', 'prodImages')
         .getOne();
     }
     if (!product) {
@@ -83,16 +83,33 @@ export class ProductsService {
   }
 
   async update(id: string, updateProductDto: UpdateProductDto) {
+    const { images, ...toUpdate } = updateProductDto;
     const product = await this.productRepository.preload({
       id,
-      ...updateProductDto,
-      images: [],
+      ...toUpdate,
     });
     if (!product) throw new NotFoundException(`Producto with ${id} not found`);
 
+    //Create queryRunner
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      return this.productRepository.save(product);
+      if (images) {
+        await queryRunner.manager.delete(ProductImage, { product: { id } });
+        product.images = images.map((image) =>
+          this.productImageRepository.create({ url: image }),
+        );
+      }
+      await queryRunner.manager.save(product);
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+      //await this.productRepository.save(product);
+      return this.findOnePlain(id);
     } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
       this.handleDBExceptions(error);
     }
   }
@@ -110,5 +127,14 @@ export class ProductsService {
     throw new InternalServerErrorException(
       'Unexpected error, check server logs',
     );
+  }
+
+  async deleteAllProducts() {
+    const query = this.productRepository.createQueryBuilder('product');
+    try {
+      return await query.delete().where({}).execute();
+    } catch (error) {
+      this.handleDBExceptions(error);
+    }
   }
 }
